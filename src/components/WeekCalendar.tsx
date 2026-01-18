@@ -113,16 +113,22 @@ export default function WeekCalendar() {
     const scrollTop = calendarRef.current.scrollTop;
     const relativeY = clientY - rect.top + scrollTop;
 
-    const hourIndex = Math.floor(relativeY / SLOT_HEIGHT);
+    let hourIndex = Math.floor(relativeY / SLOT_HEIGHT);
     const minuteOffset = ((relativeY % SLOT_HEIGHT) / SLOT_HEIGHT) * 60;
-    const minute = Math.round(minuteOffset / 15) * 15;
+    let minute = Math.round(minuteOffset / 15) * 15;
+
+    // Handle minute overflow - when rounding pushes to 60, increment the hour
+    if (minute >= 60) {
+      minute = 0;
+      hourIndex += 1;
+    }
 
     if (hourIndex < 0 || hourIndex >= HOURS.length) return null;
 
     return {
       day: days[dayIndex],
       hour: HOURS[hourIndex],
-      minute: minute >= 60 ? 0 : minute,
+      minute,
     };
   }, [days]);
 
