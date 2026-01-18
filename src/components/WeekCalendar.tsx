@@ -29,7 +29,10 @@ export default function WeekCalendar() {
   const [userTimezone, setUserTimezone] = useState('America/New_York');
   const [viewMode, setViewMode] = useState<'day' | '3day' | 'week'>('week');
   const [mobileStartIndex, setMobileStartIndex] = useState(0);
+  const [isLongPressActive, setIsLongPressActive] = useState(false);
   const calendarRef = useRef<HTMLDivElement>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     setUserTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -61,6 +64,36 @@ export default function WeekCalendar() {
     }
   }, [currentDate]);
 
+  // Auto-scroll to current time on mount
+  useEffect(() => {
+    if (calendarRef.current) {
+      const currentHour = new Date().getHours();
+      if (currentHour >= HOURS[0] && currentHour <= HOURS[HOURS.length - 1]) {
+        // Scroll to show current hour with some buffer above
+        const scrollPosition = (currentHour - HOURS[0]) * SLOT_HEIGHT - 50;
+        calendarRef.current.scrollTop = Math.max(0, scrollPosition);
+      }
+    }
+  }, []);
+
+  // Prevent scroll when long-press selection is active
+  // Must use native event listener with { passive: false } to allow preventDefault
+  useEffect(() => {
+    const container = calendarRef.current;
+    if (!container) return;
+
+    const handleTouchMoveNative = (e: TouchEvent) => {
+      if (isLongPressActive) {
+        e.preventDefault();
+      }
+    };
+
+    container.addEventListener('touchmove', handleTouchMoveNative, { passive: false });
+    return () => {
+      container.removeEventListener('touchmove', handleTouchMoveNative);
+    };
+  }, [isLongPressActive]);
+
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
   const allDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
@@ -84,13 +117,26 @@ export default function WeekCalendar() {
       if (viewMode === 'week') {
         setCurrentDate(addDays(currentDate, -7));
       } else {
-        setMobileStartIndex(Math.max(0, mobileStartIndex - step));
+        // At start of week, go to previous week
+        if (mobileStartIndex === 0) {
+          setCurrentDate(addDays(currentDate, -7));
+          setMobileStartIndex(viewMode === 'day' ? 6 : 4); // End of previous week
+        } else {
+          setMobileStartIndex(Math.max(0, mobileStartIndex - step));
+        }
       }
     } else {
       if (viewMode === 'week') {
         setCurrentDate(addDays(currentDate, 7));
       } else {
-        setMobileStartIndex(Math.min(7 - step, mobileStartIndex + step));
+        const maxIndex = 7 - step;
+        // At end of week, go to next week
+        if (mobileStartIndex >= maxIndex) {
+          setCurrentDate(addDays(currentDate, 7));
+          setMobileStartIndex(0); // Start of next week
+        } else {
+          setMobileStartIndex(Math.min(maxIndex, mobileStartIndex + step));
+        }
       }
     }
   };
@@ -180,16 +226,60 @@ export default function WeekCalendar() {
     updateDrag(e.clientY, dayIndex);
   }, [updateDrag]);
 
-  // Touch handlers
+  // Touch handlers with long-press detection
+  const LONG_PRESS_DURATION = 300; // ms
+  const MOVE_THRESHOLD = 10; // pixels - if moved more than this, cancel long press
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+  }, []);
+
   const handleTouchStart = useCallback((e: React.TouchEvent, dayIndex: number) => {
     const touch = e.touches[0];
-    startDrag(touch.clientY, dayIndex);
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+
+    // Start long-press timer
+    longPressTimerRef.current = setTimeout(() => {
+      setIsLongPressActive(true);
+      startDrag(touch.clientY, dayIndex);
+      // Vibrate if supported (haptic feedback)
+      if (navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+    }, LONG_PRESS_DURATION);
   }, [startDrag]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent, dayIndex: number) => {
     const touch = e.touches[0];
-    updateDrag(touch.clientY, dayIndex);
-  }, [updateDrag]);
+
+    // If long press hasn't activated yet, check if we've moved too much
+    if (!isLongPressActive && touchStartPosRef.current) {
+      const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+      const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+      if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) {
+        cancelLongPress();
+        return;
+      }
+    }
+
+    // If long press is active, update the drag selection
+    // (scroll prevention is handled by native event listener with { passive: false })
+    if (isLongPressActive) {
+      updateDrag(touch.clientY, dayIndex);
+    }
+  }, [isLongPressActive, updateDrag, cancelLongPress]);
+
+  const handleTouchEnd = useCallback(() => {
+    cancelLongPress();
+    if (isLongPressActive) {
+      endDrag();
+      setIsLongPressActive(false);
+    }
+  }, [isLongPressActive, endDrag, cancelLongPress]);
 
   const getSelectionStyle = (day: Date) => {
     if (!selection || !isSameDay(day, selection.startTime)) return null;
@@ -229,8 +319,7 @@ export default function WeekCalendar() {
             <div className="flex items-center gap-1 sm:hidden">
               <button
                 onClick={() => navigateDays('prev')}
-                disabled={viewMode !== 'week' && mobileStartIndex === 0}
-                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-30"
+                className="p-2 hover:bg-gray-100 active:bg-gray-200 rounded-lg"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -238,14 +327,13 @@ export default function WeekCalendar() {
               </button>
               <button
                 onClick={goToToday}
-                className="px-2 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg"
+                className="px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 active:bg-blue-100 rounded-lg"
               >
                 Today
               </button>
               <button
                 onClick={() => navigateDays('next')}
-                disabled={viewMode !== 'week' && mobileStartIndex >= 7 - (viewMode === 'day' ? 1 : 3)}
-                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-30"
+                className="p-2 hover:bg-gray-100 active:bg-gray-200 rounded-lg"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -290,7 +378,7 @@ export default function WeekCalendar() {
 
         {/* Mobile instruction */}
         <p className="sm:hidden text-xs text-gray-400 mt-2">
-          Drag on the calendar to select a time slot
+          Hold on the calendar to select a time slot
         </p>
       </div>
 
@@ -321,10 +409,11 @@ export default function WeekCalendar() {
       {/* Time Grid */}
       <div
         ref={calendarRef}
-        className="flex-1 overflow-auto relative touch-pan-y"
+        className={`flex-1 overflow-auto relative ${isLongPressActive ? 'touch-none' : 'touch-pan-y'}`}
         onMouseUp={endDrag}
         onMouseLeave={endDrag}
-        onTouchEnd={endDrag}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
       >
         <div className="flex min-h-full">
           {/* Time Labels */}
@@ -356,7 +445,7 @@ export default function WeekCalendar() {
               {HOURS.map((hour) => (
                 <div
                   key={hour}
-                  className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
+                  className="border-b border-gray-100 hover:bg-gray-50 active:bg-blue-50 cursor-pointer transition-colors"
                   style={{ height: SLOT_HEIGHT }}
                 />
               ))}
@@ -364,10 +453,10 @@ export default function WeekCalendar() {
               {/* Selection overlay */}
               {selection && isSameDay(day, selection.startTime) && (
                 <div
-                  className="absolute left-0.5 right-0.5 sm:left-1 sm:right-1 bg-blue-500 bg-opacity-30 border-l-4 border-blue-600 rounded pointer-events-none"
+                  className={`absolute left-0.5 right-0.5 sm:left-1 sm:right-1 bg-blue-500 bg-opacity-30 border-l-4 border-blue-600 rounded pointer-events-none ${isLongPressActive ? 'ring-2 ring-blue-400 ring-opacity-50' : ''}`}
                   style={getSelectionStyle(day) || undefined}
                 >
-                  <div className="p-0.5 sm:p-1 text-[10px] sm:text-xs text-blue-800 font-medium truncate">
+                  <div className="p-1 text-xs text-blue-800 font-medium truncate">
                     {format(selection.startTime, 'h:mm a')} - {format(selection.endTime, 'h:mm a')}
                   </div>
                 </div>
