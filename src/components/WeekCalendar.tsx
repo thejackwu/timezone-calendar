@@ -371,7 +371,7 @@ export default function WeekCalendar() {
         </div>
 
         {/* Current time indicator */}
-        {days.some(isToday) && (
+        {days.some((day) => isToday(day)) && (
           <div
             className="absolute left-12 sm:left-16 right-0 flex items-center pointer-events-none z-20"
             style={{
