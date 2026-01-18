@@ -17,7 +17,7 @@ interface TimeSelection {
   endTime: Date;
 }
 
-const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 6 AM to 11 PM
+const HOURS = Array.from({ length: 24 }, (_, i) => i); // 12 AM to 11 PM
 const SLOT_HEIGHT = 48; // pixels per hour
 
 export default function WeekCalendar() {
@@ -420,7 +420,7 @@ export default function WeekCalendar() {
       {/* Time Grid */}
       <div
         ref={calendarRef}
-        className={`flex-1 overflow-auto relative ${isLongPressActive ? 'touch-none' : 'touch-pan-y'}`}
+        className="flex-1 overflow-y-auto relative"
         onMouseUp={endDrag}
         onMouseLeave={endDrag}
         onTouchEnd={handleTouchEnd}
